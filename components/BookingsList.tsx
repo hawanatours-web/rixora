@@ -671,7 +671,7 @@ const BookingsList: React.FC = () => {
             </div>
 
             <div class="invoice-title">
-                <h1>Tax Invoice</h1>
+                <h1>Invoice</h1>
                 <p>فاتورة ضريبية</p>
             </div>
 
