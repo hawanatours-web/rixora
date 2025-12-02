@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hawana-cache-v2';
+const CACHE_NAME = 'hawana-cache-v2.5-stable'; // Bumped version to force update
 const urlsToCache = [
   '/',
   '/index.html',
@@ -23,16 +23,9 @@ self.addEventListener('fetch', (event) => {
   }
 
   event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        if (response) {
-          return response;
-        }
-        return fetch(event.request).catch(() => {
-            // Fallback or just fail gracefully for images/assets
-            return null;
-        });
-      })
+    fetch(event.request).catch(() => {
+        return caches.match(event.request);
+    })
   );
 });
 
