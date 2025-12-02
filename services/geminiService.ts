@@ -1,18 +1,25 @@
+
 import { GoogleGenAI } from "@google/genai";
 
 const getClient = () => {
+    // This value is replaced at build time by Vite
     const key = process.env.API_KEY;
+    
     if (!key) {
-        console.error("API Key missing");
+        console.error("Gemini Service: API Key is missing. Please check your Vercel Environment Variables (API_KEY or VITE_API_KEY) and redeploy.");
         return null;
     }
+    
+    // Debug log (safe version)
+    console.log("Gemini Service: API Key present (Starts with " + key.substring(0, 4) + "...)");
+    
     return new GoogleGenAI({ apiKey: key });
 };
 
 export const analyzeFinancialQuery = async (query: string, contextData: string): Promise<string> => {
   try {
     const ai = getClient();
-    if (!ai) return "عذراً، مفتاح الربط مع الذكاء الاصطناعي مفقود.";
+    if (!ai) return "عذراً، مفتاح الربط مع الذكاء الاصطناعي مفقود (API Key Missing). يرجى التأكد من الإعدادات.";
 
     const model = 'gemini-2.5-flash';
     const systemInstruction = `
@@ -39,14 +46,14 @@ export const analyzeFinancialQuery = async (query: string, contextData: string):
       contents: prompt,
       config: {
         systemInstruction: systemInstruction,
-        thinkingConfig: { thinkingBudget: 0 } 
+        // Removed thinkingConfig to avoid potential conflicts with Flash model defaults or budget 0 issues
       },
     });
 
     return response.text || "عذراً، لم أتمكن من تحليل البيانات في الوقت الحالي.";
   } catch (error: any) {
     console.error("Gemini API Connection Error:", error);
-    return "حدث خطأ أثناء الاتصال بالمساعد الذكي.";
+    return `حدث خطأ أثناء الاتصال بالمساعد الذكي: ${error.message || 'Unknown error'}`;
   }
 };
 
@@ -56,7 +63,7 @@ export const getFlightDetails = async (flightNo: string, date: string): Promise<
         const ai = getClient();
         if (!ai) return null;
 
-        // Using Pro model for better search reasoning + grounding
+        // Using Pro model for better search reasoning + grounding if available, otherwise fallback
         const model = 'gemini-2.5-flash'; 
         
         const prompt = `
@@ -81,7 +88,6 @@ export const getFlightDetails = async (flightNo: string, date: string): Promise<
             contents: prompt,
             config: {
                 tools: [{ googleSearch: {} }], // Enable Grounding
-                // responseMimeType: "application/json" // Removed: Cannot use responseMimeType with tools
             }
         });
 
