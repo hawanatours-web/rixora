@@ -1,8 +1,8 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { Agent, Currency, TransactionType } from '../types';
-import { Plus, Search, Edit, Trash2, Printer, DollarSign, Building2, Phone, Mail, AlertTriangle, Coins, X, Landmark, FileCheck2 } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, Printer, DollarSign, Building2, Phone, Mail, AlertTriangle, Coins, X, Landmark, FileCheck2, TrendingDown } from 'lucide-react';
 
 const AgentsList: React.FC = () => {
   const { agents, allBookings, allTransactions, treasury, addAgent, updateAgent, deleteAgent, addAgentPayment, systemCurrency, convertAmount, showNotification, companySettings, convertCurrency, exchangeRates } = useData();
@@ -48,6 +48,10 @@ const AgentsList: React.FC = () => {
   }, [paymentCurrency]);
 
   const getAgentMetrics = (agent: Agent, targetCurrency?: Currency) => {
+      // FIX: Find other agents whose names include THIS agent's name (e.g. "X Venus" includes "Venus")
+      // This prevents "Payment to X Venus" from showing up in "Venus" account.
+      const conflictingAgents = agents.filter(a => a.id !== agent.id && a.name.includes(agent.name));
+
       // 1. Calculate Total Debt from Bookings (Services)
       const totalServicesJOD = allBookings.reduce((total, booking) => {
           const agentServices = booking.services?.filter(s => s.supplier === agent.name) || [];
@@ -60,7 +64,14 @@ const AgentsList: React.FC = () => {
 
       // 2. Calculate Total Payments made to this Agent
       const totalPaymentsJOD = allTransactions.reduce((total, t) => {
-          if (t.type === TransactionType.EXPENSE && t.description.includes(agent.name)) {
+          if (t.type === TransactionType.EXPENSE) {
+              // Basic check
+              if (!t.description.includes(agent.name)) return total;
+
+              // Strict check: If the description also contains the name of a "Super Agent" (e.g. X Venus), ignore it for the "Sub Agent" (Venus).
+              const isFalseMatch = conflictingAgents.some(conflict => t.description.includes(conflict.name));
+              if (isFalseMatch) return total;
+
               return total + t.amount;
           }
           return total;
@@ -77,6 +88,15 @@ const AgentsList: React.FC = () => {
       }
       return { totalServices: totalServicesJOD, effectiveBalance: effectiveBalanceJOD };
   };
+
+  // --- NEW: Calculate Total Payables (Money we owe to agents) ---
+  const totalAgentsPayables = useMemo(() => {
+      return agents.reduce((total, agent) => {
+          const { effectiveBalance } = getAgentMetrics(agent, 'JOD'); // Get in JOD for consistency
+          // Assuming Positive Balance = We owe them (Payable)
+          return total + (effectiveBalance > 0 ? effectiveBalance : 0);
+      }, 0);
+  }, [agents, allBookings, allTransactions]);
 
   // --- Handlers ---
   const handleOpenCreate = () => { 
@@ -135,9 +155,99 @@ const AgentsList: React.FC = () => {
   const handleOpenPayment = (agent: Agent) => { setSelectedAgent(agent); setPayAmount(''); setPaymentCurrency(agent.currency || 'JOD'); setExchangeRate('1'); setSelectedTreasuryId(treasury.length > 0 ? treasury[0].id : ''); setIsPaymentModalOpen(true); };
   const handleSubmitPayment = (e: React.FormEvent) => { e.preventDefault(); const amountValue = Number(payAmount); const rateValue = parseFloat(exchangeRate); if (selectedAgent && amountValue > 0 && selectedTreasuryId && !isNaN(rateValue)) { const amountInJOD = amountValue * rateValue; addAgentPayment(selectedAgent.id, amountInJOD, selectedTreasuryId); showNotification('تم تسجيل سند الصرف وتحديث الأرصدة', 'success'); setIsPaymentModalOpen(false); } };
   
+  // --- NEW: Print Total Payables Report ---
+  const handlePrintTotalPayables = () => {
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) return;
+
+      const creditors = agents
+          .map(a => ({...a, currentBalance: getAgentMetrics(a, 'JOD').effectiveBalance}))
+          .filter(a => a.currentBalance > 0.01)
+          .sort((a, b) => b.currentBalance - a.currentBalance);
+
+      const totalDebt = creditors.reduce((sum, c) => sum + c.currentBalance, 0);
+
+      const showLogo = companySettings.logoUrl && (companySettings.logoVisibility === 'both' || companySettings.logoVisibility === 'print');
+      const logoHtml = showLogo 
+          ? `<img src="${companySettings.logoUrl}" style="max-height: 80px; max-width: 200px; object-fit: contain;" />`
+          : `<div class="logo">${companySettings.logoText}</div>`;
+
+      const html = `
+        <!DOCTYPE html>
+        <html lang="ar" dir="rtl">
+        <head>
+            <title>Total Payables Report</title>
+            <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+            <style>
+                @page { size: A4; margin: 0; }
+                body { font-family: 'Cairo', sans-serif; padding: 0; margin: 0; background: white; width: 210mm; min-height: 297mm; }
+                .container { padding: 15mm; width: 100%; box-sizing: border-box; }
+                .header { display: flex; justify-content: space-between; border-bottom: 2px solid #0891b2; padding-bottom: 10px; margin-bottom: 20px; }
+                .logo { font-size: 22px; font-weight: 800; color: #0891b2; }
+                table { width: 100%; border-collapse: collapse; font-size: 11px; }
+                th { background: #0f172a; color: white; padding: 8px; text-align: right; }
+                td { border-bottom: 1px solid #ddd; padding: 8px; }
+                tr:nth-child(even) { background: #f8fafc; }
+                .total-box { margin-top: 20px; text-align: left; background: #f1f5f9; padding: 15px; border-radius: 8px; border: 1px solid #cbd5e1; width: fit-content; margin-right: auto; }
+                .footer { margin-top: 30px; text-align: center; font-size: 10px; color: #64748b; border-top: 1px solid #eee; padding-top: 10px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <div>
+                        ${logoHtml}
+                        <div style="font-size:12px; margin-top:5px;">${companySettings.nameAr}</div>
+                    </div>
+                    <div style="text-align: left; font-size: 11px;">
+                        <strong>${companySettings.nameEn}</strong><br>
+                        Date: ${new Date().toLocaleDateString('en-GB')}<br>
+                        Report: Suppliers Payables Summary
+                    </div>
+                </div>
+                <h2 style="text-align:center; color:#0f172a;">تقرير إجمالي ذمم الموردين والوكلاء</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 5%;">#</th>
+                            <th style="width: 35%;">اسم المورد / الوكيل</th>
+                            <th style="width: 20%;">رقم الهاتف</th>
+                            <th style="width: 15%;">النوع</th>
+                            <th style="width: 25%;">الرصيد المستحق (JOD)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${creditors.map((c, i) => `
+                            <tr>
+                                <td>${i + 1}</td>
+                                <td style="font-weight:bold;">${c.name}</td>
+                                <td style="direction:ltr; text-align:right;">${c.phone || '-'}</td>
+                                <td>${c.type}</td>
+                                <td style="font-weight:bold; color:#e11d48; direction:ltr;">${convertAmount(c.currentBalance).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+                <div class="total-box">
+                    <div style="font-size: 12px; color: #64748b;">إجمالي الذمم (Total Payables)</div>
+                    <div style="font-size: 24px; font-weight: 800; color: #e11d48; direction: ltr;">${convertAmount(totalDebt).toLocaleString('en-US', { minimumFractionDigits: 2 })} <span style="font-size:14px;">JOD</span></div>
+                </div>
+                <div class="footer">Generated by ${companySettings.nameEn} System</div>
+            </div>
+            <script>window.print();</script>
+        </body>
+        </html>
+      `;
+      printWindow.document.write(html);
+      printWindow.document.close();
+  };
+
   const handlePrintReport = (agent: Agent) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
+
+    // FIX for Reporting: Use same logic as metrics to avoid double counting
+    const conflictingAgents = agents.filter(a => a.id !== agent.id && a.name.includes(agent.name));
 
     // 1. Get Services
     const agentServices = allBookings.flatMap(b => 
@@ -150,10 +260,14 @@ const AgentsList: React.FC = () => {
         })) || []
     );
 
-    // 2. Get Payments
-    const agentPayments = allTransactions.filter(t => 
-        t.type === TransactionType.EXPENSE && t.description.includes(agent.name)
-    ).map(t => ({
+    // 2. Get Payments (With Exclusion Logic)
+    const agentPayments = allTransactions.filter(t => {
+        if (t.type !== TransactionType.EXPENSE) return false;
+        if (!t.description.includes(agent.name)) return false;
+        // Strict exclusion
+        if (conflictingAgents.some(conflict => t.description.includes(conflict.name))) return false;
+        return true;
+    }).map(t => ({
         date: t.date,
         ref: t.referenceNo || t.id,
         desc: t.description,
@@ -298,6 +412,28 @@ const AgentsList: React.FC = () => {
           <Plus size={18} />
           <span>إضافة وكيل جديد</span>
         </button>
+      </div>
+
+      {/* --- NEW: Summary Card - Total Payables --- */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+         <div className="bg-white dark:bg-[#1e293b] p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg flex items-center justify-between relative overflow-hidden group">
+            <div className="absolute top-0 right-0 w-2 h-full bg-rose-500"></div>
+            <div>
+               <p className="text-slate-500 dark:text-slate-400 text-sm mb-1 font-bold">إجمالي المبالغ المستحقة للوكلاء</p>
+               <h3 className="text-2xl font-bold text-slate-800 dark:text-white dir-ltr">
+                   {convertAmount(totalAgentsPayables).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-sm text-slate-500">{systemCurrency}</span>
+               </h3>
+            </div>
+            <div className="flex flex-col gap-2 items-end">
+                <div className="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-600 dark:text-rose-500 border border-rose-200 dark:border-rose-900/50">
+                   <TrendingDown size={24} />
+                </div>
+                {/* Print Button */}
+                <button onClick={handlePrintTotalPayables} className="text-[10px] flex items-center gap-1 bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+                    <Printer size={12} /> طباعة كشف
+                </button>
+            </div>
+         </div>
       </div>
 
       {/* Search & Table */}
@@ -461,3 +597,4 @@ const AgentsList: React.FC = () => {
 };
 
 export default AgentsList;
+
