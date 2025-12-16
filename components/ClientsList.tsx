@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { Client, Currency, BookingStatus, TransactionType } from '../types';
-import { Plus, Search, Edit, Trash2, Printer, User, Phone, Mail, Receipt, AlertTriangle, Coins, X, Landmark, Calendar, Users, TrendingDown } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, Printer, User, Phone, Mail, Receipt, AlertTriangle, Coins, X, Landmark, Calendar, Users, TrendingDown, FileText } from 'lucide-react';
 
 const ClientsList: React.FC = () => {
   const { clients, allBookings, allTransactions, treasury, addClient, updateClient, deleteClient, addClientPayment, systemCurrency, convertAmount, showNotification, companySettings, exchangeRates } = useData();
@@ -39,6 +39,9 @@ const ClientsList: React.FC = () => {
   // Dynamic Calculation of Client Balance
   // Balance = Opening Balance (DB) + Total Sales (Bookings) - Total Payments (Transactions)
   const getClientMetrics = (client: Client) => {
+      // FIX: Check for other clients with overlapping names
+      const conflictingClients = clients.filter(c => c.id !== client.id && c.name.includes(client.name));
+
       // 1. Total Sales (Debits) from Bookings
       const totalSales = allBookings
           .filter(b => b.clientName === client.name && b.status !== BookingStatus.CANCELLED && b.status !== BookingStatus.VOIDED)
@@ -46,11 +49,17 @@ const ClientsList: React.FC = () => {
 
       // 2. Total Payments (Credits) from Transactions
       const totalPayments = allTransactions
-          .filter(t => 
-              t.type === TransactionType.INCOME && 
-              (t.category === 'مقبوضات عملاء' || t.category === 'مقبوضات حجوزات') && 
-              t.description.includes(client.name)
-          )
+          .filter(t => {
+              if (t.type !== TransactionType.INCOME) return false;
+              if (t.category !== 'مقبوضات عملاء' && t.category !== 'مقبوضات حجوزات') return false;
+              if (!t.description.includes(client.name)) return false;
+              
+              // Strict check: ignore if description matches a "Super Client" name
+              const isFalseMatch = conflictingClients.some(conflict => t.description.includes(conflict.name));
+              if (isFalseMatch) return false;
+
+              return true;
+          })
           .reduce((sum, t) => sum + t.amount, 0);
 
       // 3. Effective Balance
@@ -161,9 +170,100 @@ const ClientsList: React.FC = () => {
     }
   };
 
+  // --- NEW: Print Total Debt Report ---
+  const handlePrintTotalDebt = () => {
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) return;
+
+      // Filter only clients with debt
+      const debtors = clients
+          .map(c => ({...c, currentBalance: getClientMetrics(c)}))
+          .filter(c => c.currentBalance > 0.01)
+          .sort((a, b) => b.currentBalance - a.currentBalance);
+
+      const totalDebt = debtors.reduce((sum, c) => sum + c.currentBalance, 0);
+
+      const showLogo = companySettings.logoUrl && (companySettings.logoVisibility === 'both' || companySettings.logoVisibility === 'print');
+      const logoHtml = showLogo 
+          ? `<img src="${companySettings.logoUrl}" style="max-height: 80px; max-width: 200px; object-fit: contain;" />`
+          : `<div class="logo">${companySettings.logoText}</div>`;
+
+      const html = `
+        <!DOCTYPE html>
+        <html lang="ar" dir="rtl">
+        <head>
+            <title>Total Debt Report</title>
+            <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+            <style>
+                @page { size: A4; margin: 0; }
+                body { font-family: 'Cairo', sans-serif; padding: 0; margin: 0; background: white; width: 210mm; min-height: 297mm; }
+                .container { padding: 15mm; width: 100%; box-sizing: border-box; }
+                .header { display: flex; justify-content: space-between; border-bottom: 2px solid #0891b2; padding-bottom: 10px; margin-bottom: 20px; }
+                .logo { font-size: 22px; font-weight: 800; color: #0891b2; }
+                table { width: 100%; border-collapse: collapse; font-size: 11px; }
+                th { background: #0f172a; color: white; padding: 8px; text-align: right; }
+                td { border-bottom: 1px solid #ddd; padding: 8px; }
+                tr:nth-child(even) { background: #f8fafc; }
+                .total-box { margin-top: 20px; text-align: left; background: #f1f5f9; padding: 15px; border-radius: 8px; border: 1px solid #cbd5e1; width: fit-content; margin-right: auto; }
+                .footer { margin-top: 30px; text-align: center; font-size: 10px; color: #64748b; border-top: 1px solid #eee; padding-top: 10px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <div>
+                        ${logoHtml}
+                        <div style="font-size:12px; margin-top:5px;">${companySettings.nameAr}</div>
+                    </div>
+                    <div style="text-align: left; font-size: 11px;">
+                        <strong>${companySettings.nameEn}</strong><br>
+                        Date: ${new Date().toLocaleDateString('en-GB')}<br>
+                        Report: Clients Debt Summary
+                    </div>
+                </div>
+                <h2 style="text-align:center; color:#0f172a;">تقرير إجمالي ذمم العملاء</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 5%;">#</th>
+                            <th style="width: 35%;">اسم العميل</th>
+                            <th style="width: 20%;">رقم الهاتف</th>
+                            <th style="width: 15%;">النوع</th>
+                            <th style="width: 25%;">الرصيد المستحق (${systemCurrency})</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${debtors.map((c, i) => `
+                            <tr>
+                                <td>${i + 1}</td>
+                                <td style="font-weight:bold;">${c.name}</td>
+                                <td style="direction:ltr; text-align:right;">${c.phone || '-'}</td>
+                                <td>${c.type === 'Company' ? 'شركة' : 'فرد'}</td>
+                                <td style="font-weight:bold; color:#e11d48; direction:ltr;">${convertAmount(c.currentBalance).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+                <div class="total-box">
+                    <div style="font-size: 12px; color: #64748b;">إجمالي الديون (Total Debt)</div>
+                    <div style="font-size: 24px; font-weight: 800; color: #e11d48; direction: ltr;">${convertAmount(totalDebt).toLocaleString('en-US', { minimumFractionDigits: 2 })} <span style="font-size:14px;">${systemCurrency}</span></div>
+                </div>
+                <div class="footer">Generated by ${companySettings.nameEn} System</div>
+            </div>
+            <script>window.print();</script>
+        </body>
+        </html>
+      `;
+      printWindow.document.write(html);
+      printWindow.document.close();
+  };
+
   const handlePrintReport = (client: Client) => {
      const printWindow = window.open('', '_blank');
     if (!printWindow) return;
+
+    // FIX for Reporting: Use same logic as metrics to avoid double counting
+    const conflictingClients = clients.filter(c => c.id !== client.id && c.name.includes(client.name));
 
     // 1. Extract Client Bookings (Debits / Invoices)
     const clientBookings = allBookings
@@ -177,11 +277,14 @@ const ClientsList: React.FC = () => {
         }));
 
     // 2. Extract Client Receipts (Credits / Payments)
-    const clientReceipts = allTransactions.filter(t => 
-        t.type === TransactionType.INCOME &&
-        (t.category === 'مقبوضات عملاء' || t.category === 'مقبوضات حجوزات') && 
-        t.description.includes(client.name)
-    ).map(t => ({
+    const clientReceipts = allTransactions.filter(t => {
+        if (t.type !== TransactionType.INCOME) return false;
+        if (t.category !== 'مقبوضات عملاء' && t.category !== 'مقبوضات حجوزات') return false;
+        if (!t.description.includes(client.name)) return false;
+        // Strict exclusion
+        if (conflictingClients.some(conflict => t.description.includes(conflict.name))) return false;
+        return true;
+    }).map(t => ({
         date: t.date,
         ref: `REC-${t.referenceNo || t.id}`,
         desc: t.description,
@@ -387,8 +490,14 @@ const ClientsList: React.FC = () => {
                    {displayMoney(totalClientsDebt)} <span className="text-sm text-slate-500">{systemCurrency}</span>
                </h3>
             </div>
-            <div className="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-600 dark:text-rose-500 border border-rose-200 dark:border-rose-900/50">
-               <TrendingDown size={24} />
+            <div className="flex flex-col gap-2 items-end">
+                <div className="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-600 dark:text-rose-500 border border-rose-200 dark:border-rose-900/50">
+                   <TrendingDown size={24} />
+                </div>
+                {/* NEW: Print Button for Total Debt */}
+                <button onClick={handlePrintTotalDebt} className="text-[10px] flex items-center gap-1 bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+                    <Printer size={12} /> طباعة كشف
+                </button>
             </div>
          </div>
       </div>
@@ -665,3 +774,4 @@ const ClientsList: React.FC = () => {
 };
 
 export default ClientsList;
+
