@@ -51,7 +51,13 @@ const ReportsPage: React.FC = () => {
           const d = new Date(t.date);
           const yearMatch = d.getFullYear() === selectedYear;
           const monthMatch = selectedMonth === 'All' || d.getMonth().toString() === selectedMonth;
-          return yearMatch && monthMatch && t.type === TransactionType.EXPENSE;
+          
+          // CRITICAL FIX: Exclude 'دفعات موردين' from P&L expenses calculation
+          // Supplier payments are Balance Sheet items (settling liability), not Income Statement expenses.
+          // The cost was already accounted for in (totalSales - totalCost).
+          const isOperationalExpense = t.type === TransactionType.EXPENSE && t.category !== 'دفعات موردين';
+
+          return yearMatch && monthMatch && isOperationalExpense;
       });
 
       // 1. Totals
@@ -216,7 +222,7 @@ const ReportsPage: React.FC = () => {
                         <div class="card-value">${fmt(convertAmount(reportData.totalSales))}</div>
                     </div>
                     <div class="card">
-                        <div class="card-label">التكلفة المباشرة</div>
+                        <div class="card-label">التكلفة المباشرة (حجوزات)</div>
                         <div class="card-value">${fmt(convertAmount(reportData.totalCost))}</div>
                     </div>
                     <div class="card">
@@ -447,3 +453,4 @@ const ReportsPage: React.FC = () => {
 };
 
 export default ReportsPage;
+
