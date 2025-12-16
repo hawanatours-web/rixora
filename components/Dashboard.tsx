@@ -36,7 +36,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
               if (t.type === TransactionType.INCOME) {
                   monthlyStats[monthIndex].income += amount;
               } else if (t.type === TransactionType.EXPENSE) {
-                  monthlyStats[monthIndex].expense += amount;
+                  // FIX: Only add to "Expense" bar if it's NOT a Supplier Payment (which is debt settlement)
+                  if (t.category !== 'دفعات موردين') {
+                      monthlyStats[monthIndex].expense += amount;
+                  }
               }
           }
       });
@@ -434,3 +437,4 @@ const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
 };
 
 export default Dashboard;
+
